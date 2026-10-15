@@ -1,0 +1,9 @@
+{
+  "name": "portfolio-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Back end and admin panel for the Shrey Rastogi Design portfolio (zero dependencies)",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=22.13" }
+}
