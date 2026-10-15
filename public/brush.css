@@ -1,0 +1,12 @@
+/* Brush cursor: a Photoshop style brush. The bristles take the colour of what you hover, and fade back after a click. */
+.sr-brush-on, .sr-brush-on *, .sr-brush-on *::before, .sr-brush-on *::after { cursor: none !important; }
+.sr-cur { position: fixed; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 2147483000; opacity: 0; transition: opacity .2s; will-change: transform; --brush: #14102E; }
+.sr-cur.on { opacity: 1; }
+.sr-cur .sr-svg { position: absolute; left: 0; top: -24.2px; width: 28px; height: 25px; overflow: visible; transform-origin: 0 24.2px; transform: none; transition: transform .25s cubic-bezier(.3,1.6,.5,1); filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
+.sr-cur.hot .sr-svg { transform: rotate(-8deg) scale(1.14); }
+.sr-cur.press .sr-svg { transform: rotate(8deg) scale(.9); }
+.sr-cur .sr-bristle { fill: var(--brush); stroke: #fff; stroke-width: 14; stroke-linejoin: round; paint-order: stroke fill; transition: fill .28s ease; }
+.sr-cur.fading .sr-bristle { transition: fill 1.8s ease; }
+.sr-cur .sr-handle { fill: #14102E; stroke: #fff; stroke-width: 14; stroke-linejoin: round; paint-order: stroke fill; }
+.sr-cur .sr-lbl { position: absolute; left: 10px; top: 8px; background: #4F3BFF; color: #fff; font: 600 10px/1 system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; padding: 5px 10px; border-radius: 999px; white-space: nowrap; opacity: 0; transform: scale(.8); transform-origin: left center; transition: opacity .2s, transform .2s; }
+.sr-cur.big .sr-lbl { opacity: 1; transform: none; }
