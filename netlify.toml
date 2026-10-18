@@ -1,2 +1,22 @@
+# Netlify settings for the WEBSITE only (the back end runs on Render, Netlify cannot run server.js).
+#
+# 1. Publish only the public/ folder (that is where index.html and live.js are).
+# 2. Send /api/* and /uploads/* to your Render back end, so the website gets the
+#    look, music, work, reviews and Resume you saved in the admin panel.
+#
+# BEFORE YOU DEPLOY: replace YOUR-APP-NAME.onrender.com (twice) with your real Render address.
+
 [build]
-  functions = "netlify/functions"
+  publish = "public"
+
+[[redirects]]
+  from = "/api/*"
+  to = "https://YOUR-APP-NAME.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/uploads/*"
+  to = "https://YOUR-APP-NAME.onrender.com/uploads/:splat"
+  status = 200
+  force = true
