@@ -1,0 +1,11 @@
+{
+  "name": "Shrey Rastogi Admin",
+  "short_name": "SR Admin",
+  "start_url": "/admin/",
+  "scope": "/admin/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F7F6FF",
+  "theme_color": "#4F3BFF",
+  "icons": [{ "src": "logo.png", "sizes": "any", "type": "image/png" }]
+}
