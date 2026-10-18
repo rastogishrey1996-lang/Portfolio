@@ -332,12 +332,13 @@ function publicContent() {
 let applyTimer = null;
 function applyToWebsite() {
   const file = path.join(PUBLIC_DIR, 'index.html'), backup = path.join(DATA_DIR, 'index.original.html');
+  if (!fs.existsSync(file)) throw new Error('the website files are not in the public folder yet (public/index.html and public/live.js)');
   let html = fs.readFileSync(file, 'utf8');
   if (!fs.existsSync(backup)) fs.writeFileSync(backup, html);
   html = html.replace(/<!--SR-BAKED-->[\s\S]*?<!--\/SR-BAKED-->\s*/, '');
   const data = JSON.stringify({ ...publicContent(), bakedAt: now() }).replace(/</g, '\\u003c').replace(/\u2028|\u2029/g, '');
   const block = '<!--SR-BAKED--><script type="application/json" id="sr-baked">' + data + '</script><!--/SR-BAKED-->\n';
-  const marker = html.indexOf('<script src="/live.js"');
+  const marker = html.search(/<script src="\/?live\.js"/);
   if (marker < 0) throw new Error('index.html has no live.js line');
   html = html.slice(0, marker) + block + html.slice(marker);
   fs.writeFileSync(file + '.tmp', html); fs.renameSync(file + '.tmp', file);
@@ -891,7 +892,13 @@ function serveStatic(req, res, url) {
   const file = path.normalize(path.join(base, rel));
   if (!file.startsWith(base + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, buf) => {
-    if (err) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not found'); }
+    if (err) {
+      if (base === PUBLIC_DIR && rel === '/index.html') { /* the back end can run before the website files are added */
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Back end is running</title><body style="font:16px/1.6 system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 20px;color:#14102E"><h1 style="font-size:24px">Back end is running</h1><p>The website files are not here yet. Copy <b>index.html</b> and <b>live.js</b> from the front end folder into this server\'s <b>public</b> folder, then reload this page.</p><p><a href="/admin/">Open the admin panel</a></p></body>');
+      }
+      res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not found');
+    }
     const ext = path.extname(file).toLowerCase();
     res.writeHead(200, {
       'Content-Type': MIME[ext] || 'application/octet-stream',
