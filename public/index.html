@@ -90,6 +90,9 @@ a.nl .ni { display: none; }
 @keyframes ping { from { transform: scale(.6); opacity: 1; } to { transform: scale(1.5); opacity: 0; } }
 h1 { font-size: clamp(30px, 6.3vw, 92px); font-weight: 800; line-height: 1.04; margin-top: 28px; max-width: none; }
 h1 .acc { color: var(--accent); }
+/* availability badge when the admin sets the status to offline */
+.status.off .dot { background: var(--warm); }
+.status.off .dot::after { border-color: var(--warm); animation: none; opacity: 0; }
 h1 .swap span:nth-child(2) { color: var(--pink); }
 h1 .swap span:nth-child(3) { color: var(--warm); }
 h1 .swap span:nth-child(4) { color: var(--mint); }
@@ -100,7 +103,7 @@ h1 .swap span { display: block; animation: roll 12s infinite cubic-bezier(.7,0,.
 .cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
 .btn { display: inline-flex; align-items: center; gap: 10px; padding: 15px 24px; border-radius: 999px; font: 600 16px var(--f-body); text-decoration: none; border: 1.5px solid var(--fg); cursor: pointer; transition: transform .25s, background .25s, color .25s; }
 .btn.solid { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.btn.ghost { background: var(--surface); color: var(--fg); }
+.btn.ghost { background: transparent; color: var(--fg); }
 .btn:hover { transform: translateY(-3px); }
 .btn.ghost:hover { background: var(--fg); color: var(--bg); }
 .btn .arr { transition: transform .25s; }
@@ -274,6 +277,10 @@ a.bcase { display: block; color: inherit; text-decoration: none; }
 .cap .mono { font-size: 11px; }
 .cap .go { flex: none; width: 38px; height: 38px; border-radius: 50%; background: var(--fg); color: var(--bg); display: grid; place-items: center; font-size: 16px; transition: background .3s, transform .3s; }
 .tile:hover .cap .go { background: var(--accent); color: var(--on-accent); transform: rotate(-45deg); }
+.art-img { padding: 0; display: block; background: var(--surface); }
+.art-img::before { display: none; }
+.art-img img { position: absolute; inset: 0; width: 100%; height: calc(100% - 0px); object-fit: cover; }
+.art-img::after { content: ""; position: absolute; inset: 0; background: linear-gradient(transparent 55%, rgba(20,16,46,.18)); }
 .tile .tag { position: absolute; top: 14px; left: 14px; z-index: 2; background: var(--ink); color: #fff; font: 500 11px var(--f-mono); letter-spacing: .08em; text-transform: uppercase; padding: 5px 10px; border-radius: 999px; }
 .tile .idx { position: absolute; top: 14px; right: 14px; z-index: 2; font: 500 12px var(--f-mono); letter-spacing: .08em; color: var(--ink); background: rgba(255,255,255,.8); padding: 5px 10px; border-radius: 999px; }
 .tile.cta { background: var(--accent); border-color: var(--accent); color: var(--on-accent); padding: 28px; display: flex; flex-direction: column; justify-content: space-between; }
@@ -1006,7 +1013,6 @@ body, .nav, .player, .marq, .chip, .field input, .field select, .field textarea,
         </div>
         <div class="submit-row">
           <button type="submit" class="btn solid">Submit</button>
-          <a class="btn ghost" href="https://wa.me/917987915427?text=Hi%20Shrey%2C%20I%20need%20some%20help%20with%20my%20project%20form." target="_blank" rel="noopener">Help</a>
           <p class="fmsg" id="fmsg" role="status" aria-live="polite"></p>
         </div>
         </fieldset>
@@ -1282,8 +1288,8 @@ body, .nav, .player, .marq, .chip, .field input, .field select, .field textarea,
     if (visible) {
       ctx.clearRect(0, 0, W, H);
       /* quiet dot grid */
-      var day = document.documentElement.getAttribute('data-theme') !== 'dark'; ctx.globalAlpha = day ? 0.24 : 0.2; ctx.fillStyle = pal.muted;
-      for (var x = 15; x < W; x += 30) for (var y = 15; y < H; y += 30) ctx.fillRect(x - 1, y - 1, 2, 2);
+      var day = document.documentElement.getAttribute('data-theme') !== 'dark'; ctx.globalAlpha = day ? 0.5 : 0.2; ctx.fillStyle = pal.muted;
+      for (var x = 15; x < W; x += 30) for (var y = 15; y < H; y += 30) ctx.fillRect(x - 1.5, y - 1.5, day ? 3 : 2, day ? 3 : 2);
       /* soft glow under the pointer */
       if (inside) {
         sx += (mx - sx) * 0.35; sy += (my - sy) * 0.35;
@@ -1324,8 +1330,8 @@ body, .nav, .player, .marq, .chip, .field input, .field select, .field textarea,
   }
   function drawStatic() {
     ctx.clearRect(0, 0, W, H);
-    var day = document.documentElement.getAttribute('data-theme') !== 'dark'; ctx.globalAlpha = day ? 0.24 : 0.2; ctx.fillStyle = pal.muted;
-    for (var x = 15; x < W; x += 30) for (var y = 15; y < H; y += 30) ctx.fillRect(x - 1, y - 1, 2, 2);
+    var day = document.documentElement.getAttribute('data-theme') !== 'dark'; ctx.globalAlpha = day ? 0.5 : 0.2; ctx.fillStyle = pal.muted;
+    for (var x = 15; x < W; x += 30) for (var y = 15; y < H; y += 30) ctx.fillRect(x - 1.5, y - 1.5, day ? 3 : 2, day ? 3 : 2);
     shapes.forEach(function (s) { if (!s.off) drawShape(s); }); ctx.globalAlpha = 1;
   }
   size();
@@ -1528,19 +1534,31 @@ body, .nav, .player, .marq, .chip, .field input, .field select, .field textarea,
 
   /* work filters */
   var chips = document.querySelectorAll('.filters .chip'), tiles = document.querySelectorAll('.tile[data-t]');
-  chips.forEach(function (c) {
+  function bindChip(c) {
+    if (c._bound) return; c._bound = true;
     c.addEventListener('click', function () {
       chips.forEach(function (o) { o.setAttribute('aria-pressed', o === c ? 'true' : 'false'); });
       var f = c.getAttribute('data-f');
       tiles.forEach(function (t) { t.hidden = !(f === 'all' || t.getAttribute('data-t') === f); });
       grid.scrollLeft = 0; gprog();
     });
-  });
+  }
+  chips.forEach(bindChip);
 
-  chips.forEach(function (c) {
-    var f = c.getAttribute('data-f'), n = Array.prototype.filter.call(tiles, function (t) { return f === 'all' || t.getAttribute('data-t') === f; }).length;
-    var sp = document.createElement('span'); sp.className = 'cnt'; sp.textContent = n < 10 ? '0' + n : n; c.appendChild(sp);
-  });
+  function chipCounts() {
+    chips.forEach(function (c) {
+      var f = c.getAttribute('data-f'), n = Array.prototype.filter.call(tiles, function (t) { return f === 'all' || t.getAttribute('data-t') === f; }).length;
+      var sp = c.querySelector('.cnt') || c.appendChild(document.createElement('span')); sp.className = 'cnt'; sp.textContent = n < 10 ? '0' + n : n;
+    });
+  }
+  chipCounts();
+  /* called by live.js after the admin's pieces replace the sample tiles */
+  window.SR_work = function () {
+    tiles = document.querySelectorAll('.tile[data-t]'); chips = document.querySelectorAll('.filters .chip'); chips.forEach(bindChip);
+    var on = document.querySelector('.filters .chip[aria-pressed="true"]'), f = on ? on.getAttribute('data-f') : 'all';
+    tiles.forEach(function (t) { t.hidden = !(f === 'all' || t.getAttribute('data-t') === f); });
+    chipCounts(); gprog();
+  };
 
   /* work tiles: tilt and light follow the pointer */
   if (fine && !reduce) {
@@ -1576,7 +1594,7 @@ body, .nav, .player, .marq, .chip, .field input, .field select, .field textarea,
     var n = Math.min(refs.files.length, 6);
     var txt = ['Hi Shrey, I would like help with a design project.', '', ln('Name', v('name')), ln('Business', v('biz')), ln('Email', v('email')), ln('WhatsApp', v('wa')), ln('Need', need.join(', ')), ln('Size', v('size')), ln('Quality', v('quality')), ln('Needed by', v('when')),
       v('details') ? '\nAbout the project:\n' + v('details') : '', n ? '\nI have ' + n + ' reference image' + (n > 1 ? 's' : '') + ' to share in this chat.' : ''].filter(function (x, i) { return i < 2 || x; }).join('\n');
-    window.open('https://wa.me/917987915427?text=' + encodeURIComponent(txt), '_blank', 'noopener');
+    window.open('https://wa.me/' + (window.SR_WA || '917987915427') + '?text=' + encodeURIComponent(txt), '_blank', 'noopener');
     fmsg.textContent = 'Good Luck for your Deal! Your brief is ready in WhatsApp. Send it to start.';
   });
   /* one choice at a time across all "What do you need" options */
@@ -1618,82 +1636,7 @@ body, .nav, .player, .marq, .chip, .field input, .field select, .field textarea,
     function set() { ba.style.setProperty('--p', r.value + '%'); }
     r.addEventListener('input', set); set();
   })();
-  /* music player: original synthesized loops (no outside audio) */
-  (function () {
-    var pl = document.getElementById('player'); if (!pl) return;
-    var $ = function (id) { return document.getElementById(id); };
-    var T = []; /* playlist is empty: songs will be added from the admin panel */
-    var DUR = 96, idx = 0, playing = false, ctx = null, bus, master, timer = null, step = 0, nextT = 0, elapsed = 0, lastNow = 0, vol = 0.7, muted = false, pat = [];
-    function fmt(s) { s = Math.floor(s); return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2); }
-    function hz(m) { return 440 * Math.pow(2, (m - 69) / 12); }
-    function mkPat(t) { var a = [], x = t.seed * 9301 + 49297; for (var i = 0; i < 16; i++) { x = (x * 9301 + 49297) % 233280; var r = x / 233280; a.push(r < 0.28 ? -1 : Math.floor(r * 7) % t.sc.length); } return a; }
-    function gainNow() { return muted ? 0 : vol * vol * 0.5; }
-    function setup() {
-      if (ctx) return;
-      var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
-      ctx = new AC(); master = ctx.createGain(); master.gain.value = gainNow(); master.connect(ctx.destination);
-      bus = ctx.createGain(); var lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600;
-      var dl = ctx.createDelay(1); dl.delayTime.value = 0.3; var fb = ctx.createGain(); fb.gain.value = 0.32; var wet = ctx.createGain(); wet.gain.value = 0.3;
-      bus.connect(lp); lp.connect(master); lp.connect(dl); dl.connect(fb); fb.connect(dl); dl.connect(wet); wet.connect(master);
-    }
-    function note(t, f, d, type, v, att) {
-      var o = ctx.createOscillator(), g = ctx.createGain(); o.type = type; o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v, t + (att || 0.01)); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
-      o.connect(g); g.connect(bus); o.start(t); o.stop(t + d + 0.05);
-    }
-    function sched() {
-      var tr = T[idx], sd = 60 / tr.bpm / 2;
-      while (nextT < ctx.currentTime + 0.4) {
-        var i = step % 16, d = pat[i];
-        if (d >= 0) note(nextT, hz(tr.root + 12 + tr.sc[d] + (i % 8 === 7 ? 12 : 0)), sd * 1.8, tr.w, 0.12, 0.01);
-        if (step % 8 === 0) note(nextT, hz(tr.root - 12 + tr.sc[(step / 8 | 0) % 2 ? 2 : 0]), sd * 7, 'sine', 0.3, 0.02);
-        if (step % 32 === 0) [0, 2, 4].forEach(function (k) { note(nextT, hz(tr.root + tr.sc[Math.min(k, tr.sc.length - 1)]), sd * 30, 'triangle', 0.07, 1.2); });
-        nextT += sd; step++;
-      }
-    }
-    function tick() {
-      sched(); var now = ctx.currentTime; elapsed += now - lastNow; lastNow = now;
-      if (elapsed >= DUR) { go(idx + 1, true); return; }
-      draw();
-    }
-    function draw() { $('plFill').style.width = (elapsed / DUR * 100) + '%'; $('plCur').textContent = fmt(elapsed); }
-    function ui() {
-      pl.classList.toggle('on', playing);
-      $('plPlay').setAttribute('aria-label', playing ? 'Pause' : 'Play');
-      if (!T.length) { $('plTitle').textContent = 'No songs yet'; $('plSub').textContent = 'Playlist is empty'; return; }
-      $('plTitle').textContent = T[idx].n; $('plSub').textContent = playing ? 'Playing' : 'Paused';
-      Array.prototype.forEach.call($('plTracks').querySelectorAll('button'), function (b, i) { b.classList.toggle('now', i === idx); });
-    }
-    function start() {
-      if (!T.length) return;
-      setup(); if (!ctx) return;
-      ctx.resume(); lastNow = ctx.currentTime; if (nextT < ctx.currentTime) nextT = ctx.currentTime + 0.05;
-      clearInterval(timer); timer = setInterval(tick, 100); playing = true; ui();
-    }
-    function pause() { playing = false; clearInterval(timer); if (ctx) ctx.suspend(); ui(); }
-    function go(i, keep) {
-      if (!T.length) return;
-      idx = (i + T.length) % T.length; step = 0; elapsed = 0; pat = mkPat(T[idx]); $('plDur').textContent = fmt(DUR); draw();
-      if (ctx) { nextT = ctx.currentTime + 0.1; lastNow = ctx.currentTime; }
-      if (keep || playing) start(); else ui();
-    }
-    if (T.length) { pat = mkPat(T[0]); $('plDur').textContent = fmt(DUR); } else { $('plDur').textContent = '0:00'; var e = document.createElement('li'); e.className = 'pl-empty'; e.textContent = 'No songs yet. Songs added by the admin will show up here.'; $('plTracks').appendChild(e); ['plPlay', 'plNext', 'plPrev'].forEach(function (id) { $(id).disabled = true; }); }
-    T.forEach(function (t, i) {
-      var li = document.createElement('li'), b = document.createElement('button'); b.type = 'button';
-      b.innerHTML = '<span class="tn">' + (i + 1) + '</span><span></span><span class="tm">' + fmt(DUR) + '</span>'; b.children[1].textContent = t.n;
-      b.addEventListener('click', function () { go(i, true); }); li.appendChild(b); $('plTracks').appendChild(li);
-    });
-    $('plPlay').addEventListener('click', function () { playing ? pause() : start(); });
-    $('plNext').addEventListener('click', function () { go(idx + 1, playing); });
-    $('plPrev').addEventListener('click', function () { go(idx - 1, playing); });
-    function applyVol() { $('plMute').classList.toggle('muted', muted || vol === 0); if (master) master.gain.setTargetAtTime(gainNow(), ctx.currentTime, 0.02); }
-    $('plVol').addEventListener('input', function (e) { vol = e.target.value / 100; if (vol > 0) muted = false; applyVol(); });
-    $('plMute').addEventListener('click', function () { muted = !muted; applyVol(); });
-    var list = $('plList');
-    $('plBtn').addEventListener('click', function () { var o = list.classList.toggle('open'); this.setAttribute('aria-expanded', o ? 'true' : 'false'); });
-    document.addEventListener('click', function (e) { if (!list.contains(e.target)) { list.classList.remove('open'); $('plBtn').setAttribute('aria-expanded', 'false'); } });
-    ui();
-  })();
+  
 
 
 /* night / day mode */
@@ -1753,4 +1696,5 @@ body, .nav, .player, .marq, .chip, .field input, .field select, .field textarea,
 
 </script>
 
+<script src="/live.js" defer></script>
 </body></html>
