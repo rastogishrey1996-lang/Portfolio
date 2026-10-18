@@ -4,7 +4,7 @@
 const app = document.getElementById('app');
 const toastEl = document.getElementById('toast');
 const LOGO_URL = '/admin/logo.png';
-const COLORS = { accent: ['#4F3BFF', '#fff'], pink: ['#FF4FA3', '#fff'], sun: ['#FFC700', '#14102E'], warm: ['#FF5A36', '#fff'], mint: ['#12B886', '#fff'], sky: ['#22B8FF', '#14102E'] };
+const COLORS = { accent: ['#4F3BFF', '#fff'], pink: ['#FF4FA3', '#14102E'], sun: ['#FFC700', '#14102E'], warm: ['#FF5A36', '#14102E'], mint: ['#12B886', '#14102E'], sky: ['#22B8FF', '#14102E'] };
 
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
@@ -38,6 +38,42 @@ async function api(method, url, body) {
 const wrap = fn => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message, true); } };
 const fmtDate = t => new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 const readDataUrl = f => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(f); });
+/* Branding thumbnails: the first page of the PDF drawn at 1920 x 1080 (pdf.js, bundled in vendor/pdfjs) */
+const PDFJS_BASE = new URL('vendor/pdfjs/', location.href).href;
+let pdfjsLib = null;
+async function pdfThumb(file) {
+  if (!pdfjsLib) { pdfjsLib = await import(PDFJS_BASE + 'pdf.min.mjs'); pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.mjs'; }
+  const task = pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()), standardFontDataUrl: PDFJS_BASE + 'standard_fonts/', wasmUrl: PDFJS_BASE + 'wasm/', isEvalSupported: false });
+  const doc = await task.promise;
+  try {
+    const page = await doc.getPage(1), base = page.getViewport({ scale: 1 }), W = 1920, H = 1080;
+    const vp = page.getViewport({ scale: Math.max(W / base.width, H / base.height) }); /* fill the frame; wider pages are centred, taller pages keep their top */
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+    await page.render({ canvasContext: ctx, canvas: c, viewport: vp, transform: [1, 0, 0, 1, (W - vp.width) / 2, 0], background: '#ffffff' }).promise;
+    return c.toDataURL('image/jpeg', 0.86);
+  } finally { task.destroy(); }
+}
+/* Drag and drop for every upload: the file you drop is handed to the same file input that Choose file uses. */
+function wireDrop(box, input) {
+  const okType = f => { const a = (input.accept || '').split(',').map(x => x.trim()).filter(Boolean); return !a.length || a.some(t => t === f.type || (t.endsWith('/*') && f.type.startsWith(t.slice(0, -1)))); };
+  const hasFiles = e => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  ['dragenter', 'dragover'].forEach(ev => box.addEventListener(ev, e => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; box.classList.add('drag'); }));
+  ['dragleave', 'dragend'].forEach(ev => box.addEventListener(ev, e => { if (!e.relatedTarget || !box.contains(e.relatedTarget)) box.classList.remove('drag'); }));
+  box.addEventListener('drop', e => {
+    if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); box.classList.remove('drag');
+    const f = e.dataTransfer.files[0]; if (!f) return;
+    if (!okType(f)) return toast('This file type is not accepted here', true);
+    try { const dt = new DataTransfer(); dt.items.add(f); input.files = dt.files; } catch { return toast('Your browser cannot take dropped files here. Use Choose file.', true); }
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+function dropBox(input) {
+  const box = h('div', { class: 'dz' }, input, h('span', { class: 'dz-hint' }, 'or drag and drop a file here'));
+  wireDrop(box, input); return box;
+}
+/* a file dropped outside a drop area must not make the browser open it */
+['dragover', 'drop'].forEach(ev => document.addEventListener(ev, e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); }));
 
 /* ---------- unsaved-changes tracking and the Save / Cancel bar ---------- */
 let dirty = false, flash = null;
@@ -88,20 +124,18 @@ function loginForm(msg, preview) {
   const email = h('input', { type: 'email', id: preview ? null : 'em', autocomplete: 'username', required: true });
   const pw = h('input', { type: 'password', id: preview ? null : 'pw', autocomplete: 'current-password', required: true });
   const err = h('div', { class: 'err', hidden: !msg }, msg || '');
-  const cap = captchaBox();
   const form = h('form', { class: 'card' },
     h('div', { class: 'shapes' }, ...['accent', 'pink', 'sun', 'mint', 'warm'].map(c => h('i', { color: c }))),
     h('h1', {}, 'Admin'), h('p', { class: 'muted' }, 'Sign in to manage your portfolio.'),
     h('div', { class: 'field' }), err,
     h('div', { class: 'field' }, h('label', {}, 'Email'), email),
     h('div', { class: 'field' }, h('label', {}, 'Password'), pw),
-    h('div', { class: 'field' }, h('label', {}, 'Prove you are a person'), cap.el),
     h('button', { class: 'btn solid', type: 'submit' }, 'Sign in'));
   form.addEventListener('submit', async e => {
     e.preventDefault();
     if (preview) return toast('This is only a preview of the sign in screen');
-    try { await api('POST', '/login', { email: email.value, password: pw.value, ...cap.body() }); boot(); }
-    catch (x) { err.hidden = false; err.textContent = x.message; cap.refresh(); }
+    try { await api('POST', '/login', { email: email.value, password: pw.value }); boot(); }
+    catch (x) { err.hidden = false; err.textContent = x.message; }
   });
   return { form, email };
 }
@@ -127,7 +161,7 @@ function showLogin(msg) {
 }
 
 /* ---------- shell ---------- */
-const AUDIENCE = [['women', 'Women'], ['men', 'Men'], ['age13_17', 'Age 13 to 17'], ['age18_24', 'Age 18 to 24'], ['age25_34', 'Age 25 to 34'], ['age35_44', 'Age 35 to 44'], ['age45_54', 'Age 45 to 54'], ['age55_64', 'Age 55 to 64'], ['age65', 'Age 65 and above']];
+const AUDIENCE = [['women', 'Women'], ['men', 'Men'], ['age16_20', 'Age 16 to 20'], ['age20_24', 'Age 20 to 24'], ['age24_28', 'Age 24 to 28'], ['age30_40', 'Age 30 to 40'], ['age40_50', 'Age 40 to 50'], ['age50_60', 'Age 50 to 60'], ['age60', 'Age above 60']];
 const PLATFORMS = {
   instagram: { label: 'Instagram', color: 'pink', where: 'the Instagram app under Professional dashboard', audience: 'Instagram Insights under Total followers',
     fields: [['followers', 'Followers'], ['following', 'Following'], ['posts', 'Posts'], ['avgLikes', 'Average likes per post'], ['profileVisits', 'Profile visits, last 30 days']] },
@@ -146,25 +180,54 @@ const briefCats = service => {
   if (!out.size) out.add('other'); return out;
 };
 const BRIEF = { new: ['New', 'warm'], replied: ['Replied', 'sky'], won: ['Won', 'mint'], archived: ['Archived', 'sun'] };
-const WORK = { logo: ['Logo', 'sun', 'Logo, Brand mark'], social: ['Social media', 'pink', 'Social media set, 9 posts'], brochure: ['Brochures', 'mint', 'Brochure, Tri-fold'], banner: ['Banners', 'warm', 'Banner, Large format'], other: ['Other printables', 'sky', 'Other printable, Stickers'], branding: ['Branding', 'accent', 'Branding, Brand identity'], editing: ['Image editing', 'pink', 'Image editing, Retouching'], composition: ['Image composition', 'sun', 'Image composition, Photo manipulation'] };
+const WORK = { logo: ['Logo', 'sun', 'Logo, Brand mark'], social: ['Social media', 'pink', 'Social media post'], brochure: ['Brochures', 'mint', 'Brochure, Tri-fold'], banner: ['Banners', 'warm', 'Banner, Large format'], other: ['Other printables', 'sky', 'Other printable, Stickers'], branding: ['Branding', 'accent', 'Branding, Brand identity'], editing: ['Image editing', 'pink', 'Image editing, Retouching'], composition: ['Image composition', 'sun', 'Image composition, Photo manipulation'] };
 const VIEWS = {
   website: ['Website stats', 'accent', viewWebsite, 'Dashboard'],
-  instagram: ['Instagram stats', 'pink', m => viewSocial(m, 'instagram'), 'Dashboard'],
-  facebook: ['Facebook page stats', 'sky', m => viewSocial(m, 'facebook'), 'Dashboard'],
-  fiverr: ['Fiverr stats', 'mint', m => viewSocial(m, 'fiverr'), 'Dashboard'],
-  linkedin: ['LinkedIn stats', 'warm', m => viewSocial(m, 'linkedin'), 'Dashboard'],
+  style: ['Style', 'accent', m => viewLook(m, 'style'), 'Dashboard'],
+  theme: ['Theme', 'sun', m => viewLook(m, 'theme'), 'Dashboard'],
+  panels: ['Panels', 'mint', viewPanels, 'Dashboard'],
+  grievances: ['Client Grievance', 'warm', viewGrievances, 'Dashboard'],
   music: ['Music', 'pink', viewMusic, 'Hero section'],
   resume: ['Resume', 'sun', viewResume, 'Hero section'],
   ...Object.fromEntries(Object.entries(WORK).map(([k, [label, color]]) => ['work-' + k, [label, color, m => viewWork(m, k), 'Work']])),
   ...Object.fromEntries(Object.entries(BRIEF_CATS).map(([k, [label, color]]) => ['brief-' + k, [label, color, m => viewBriefs(m, k), 'Project Brief']])),
   feedbacks: ['Feedbacks', 'pink', viewFeedbacks, 'Client Feedback'],
   questions: ['Questions', 'sky', viewQuestions, 'Client Feedback'],
-  grievances: ['Client Grievance', 'warm', viewGrievances, 'Business Moderation'],
-  style: ['Style', 'accent', m => viewLook(m, 'style'), 'Appearance'],
-  theme: ['Theme', 'sun', m => viewLook(m, 'theme'), 'Appearance'],
-  panels: ['Panels', 'mint', viewPanels, 'Appearance'],
   account: ['Account', 'sky', viewAccount, null, true],
 };
+/* Apply on main website: writes everything saved here into the website's own HTML file */
+function applyBtn() {
+  const b = h('button', { class: 'btn solid apply-btn', type: 'button', title: 'Write everything saved in this panel into the website HTML file' }, 'Apply on main website');
+  b.addEventListener('click', async () => {
+    if (dirty && !confirm('You have unsaved changes. They will not be applied. Continue?')) return;
+    b.disabled = true; b.textContent = 'Applying...';
+    try {
+      const r = await api('POST', '/apply');
+      toast('Applied. The website HTML file now has all your saved changes.');
+      modal('Applied on the main website', h('div', {}, h('p', { class: 'hint', style: 'margin:0 0 10px' }, 'Everything you saved in this panel (music, resume, work, brochures, feedbacks, questions, availability, look, panels and the Before / After slider) is now written inside the website\'s index.html file, ' + Math.round(r.bytes / 1024) + ' KB, at ' + new Date(r.at).toLocaleString() + '.'),
+        h('p', { class: 'hint', style: 'margin:0 0 12px' }, 'The original file is kept as index.original.html in the data folder. Saves already do this by themselves, so use this button only to be sure. Visitor stats and inquiries are not written into the file.'),
+        h('button', { class: 'btn sm', type: 'button', onclick: async () => { const x = await fetch('/api/admin/apply/download', { credentials: 'same-origin' }); const u = URL.createObjectURL(await x.blob()); const a = h('a', { href: u, download: 'index.html' }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000); } }, 'Download index.html')), async () => {}, 'Close');
+    } catch (e) { toast(e.message, true); }
+    b.disabled = false; b.textContent = 'Apply on main website';
+  });
+  return b;
+}
+/* Download the whole main website (index.html with all saved changes, live.js and the uploaded pictures and PDFs) as one zip */
+function downloadBtn() {
+  const b = h('button', { class: 'btn sm apply-btn', type: 'button', title: 'Save a copy of all your website files on this device' }, 'Download website files');
+  b.addEventListener('click', async () => {
+    b.disabled = true; b.textContent = 'Preparing...';
+    try {
+      let blob, name = 'portfolio-website.zip';
+      if (window.__SITE_HTML__) { blob = new Blob([window.__SITE_HTML__], { type: 'text/html' }); name = 'index.html'; } /* artifact preview: the page itself */
+      else { const x = await fetch('/api/admin/apply/zip', { credentials: 'same-origin' }); if (!x.ok) throw new Error('Could not prepare the files'); blob = await x.blob(); }
+      const u = URL.createObjectURL(blob), a = h('a', { href: u, download: name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 4000);
+      toast('Website files downloaded.');
+    } catch (e) { toast(e.message, true); }
+    b.disabled = false; b.textContent = 'Download website files';
+  });
+  return b;
+}
 let current = 'website', briefNew = {}, navCount = {};
 
 /* A menu group: a bigger heading that opens and closes its sub menu. It stays open while one of its pages is showing. */
@@ -196,6 +259,7 @@ function navGroup(label, activeKey) {
   const el = h('div', { class: 'navgrp' + (open ? '' : ' closed') + (VIEWS[activeKey] && VIEWS[activeKey][3] === label ? ' has-on' : '') + (hasNew ? ' has-dot' : '') });
   const head = h('button', { class: 'ng-head', type: 'button', 'data-i': label[0], title: label, 'aria-expanded': String(open) }, groupIcon(label), h('span', { class: 'ng-lbl' }, ...(label.includes(' ') ? [label.slice(0, label.indexOf(' ')), h('br'), label.slice(label.indexOf(' ') + 1)] : [label])), hasNew ? h('i', { class: 'ng-dot', title: 'Has new items', 'aria-hidden': 'true' }) : null, h('i', { class: 'ng-chev', 'aria-hidden': 'true' }));
   head.addEventListener('click', () => {
+    pvScroll(GROUP_TARGET[label]);
     const sh = el.closest('.shell');
     if (sh && sh.classList.contains('min') && matchMedia('(min-width: 861px)').matches) { /* rail: a click opens the menu sideways and shows this group */
       sh.classList.remove('min'); sideMin = false; try { localStorage.setItem('sr-admin-side', 'full'); } catch {}
@@ -213,6 +277,8 @@ async function newByCat() {
 }
 async function boot() {
   try { await api('GET', '/me'); } catch { return showLogin(); }
+  await refreshSlots();
+  try { await scanSite(); await refreshSlots(); } catch {} /* every sign in: the panel looks at the website again, so new images, videos and PDFs get their place on the right menu page */
   current = (location.hash.slice(1) in VIEWS) ? location.hash.slice(1) : 'website';
   go(current);
 }
@@ -229,11 +295,16 @@ function statusMenu(online) {
   return h('div', { class: 'stwrap' }, btn, menu);
 }
 async function go(name) {
+  /* remember where the page and the menu were scrolled, so a click never throws you back to the top */
+  const keepY = window.scrollY, oldSide = document.querySelector('.side'), keepSide = oldSide ? oldSide.scrollTop : 0, prev = current;
+  const [, nb, st] = await Promise.all([refreshSlots(), newByCat(), api('GET', '/status').catch(() => ({ online: true }))]); /* fetched together, not one after another */
+  if (!VIEWS[name]) name = 'website';
   dirty = false; current = name; location.hash = name;
   if (window.__srLookDraft || window.__srPanelsDraft) { window.__srLookDraft = null; window.__srPanelsDraft = null; reloadPreview(); }
   ensureDock();
-  briefNew = await newByCat();
-  let online = true; try { online = (await api('GET', '/status')).online; } catch {}
+  if (name !== prev) pvScroll(targetFor(name));
+  briefNew = nb;
+  const online = st.online !== false;
   const main = h('main', { class: 'main', id: 'view' });
   const leave = key => { if (dirty && !confirm('You have unsaved changes. Leave without saving?')) return; go(key); };
   const nav = []; let grp = null, box = null;
@@ -256,13 +327,22 @@ async function go(name) {
   const side =
     h('aside', { class: 'side' }, toggle, h('div', { class: 'logo' }, h('img', { class: 'logo-img', src: LOGO_URL, alt: 'SR logo', width: 84, height: 64 }), h('div', { class: 'logo-t' }, 'Shrey Rastogi', h('small', {}, 'Admin panel'))), nav, h('div', { class: 'spacer' }), modeRow(),
       h('div', { class: 'side-bottom' },
+        applyBtn(),
+        downloadBtn(),
         h('div', { class: 'acct-row' },
           h('button', { class: 'btn sm' + (name === 'account' ? ' on' : ''), onclick: () => leave('account') }, 'Account'),
           statusMenu(online)),
         h('button', { class: 'btn sm', onclick: wrap(async () => { await api('POST', '/logout'); showLogin(); }) }, 'Sign out')));
   shell.append(side, main);
-  app.replaceChildren(shell);
+  /* build the new page first and swap it in only when it is ready, so the old page stays on screen meanwhile (no blink) */
   try { await VIEWS[name][2](main); } catch (e) { toast(e.message, true); }
+  if (current !== name) return; /* another click started a newer page meanwhile */
+  shell.classList.toggle('min', sideMin); /* menu state as it is now, not as it was when the page started loading */
+  const oldLogo = document.querySelector('.side .logo-img'), newLogo = side.querySelector('.logo-img'); if (oldLogo && newLogo) newLogo.replaceWith(oldLogo); /* reuse the loaded logo so it never flickers */
+  app.replaceChildren(shell);
+  const sideEl = document.querySelector('.side'); if (sideEl) sideEl.scrollTop = keepSide;
+  if (name === prev) window.scrollTo(0, keepY);
+  if (sideEl) sideEl.scrollTop = keepSide;
 }
 const header = (title, sub, action) => h('div', { class: 'head' }, h('div', {}, h('h1', {}, title), sub ? h('p', {}, sub) : null), action);
 
@@ -295,17 +375,23 @@ function barList(rows, color, fmt = num) {
   return h('div', { class: 'hb' }, ...rows.map(r => h('div', { class: 'hb-row' },
     h('span', { class: 'hb-k' }, r.k), h('span', { class: 'hb-track' }, fill(color, Math.max(2, Math.round(r.n / max * 100)))), h('b', {}, fmt(r.n)))));
 }
+let statRange = '30';
 async function viewWebsite(main) {
-  const s = await api('GET', '/stats');
-  const max = Math.max(1, ...s.series.map(d => d.views));
-  const short = d => new Date(d + 'T00:00:00Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' });
-  const bars = h('div', { class: 'bars', role: 'img', 'aria-label': 'Website views per day, last 30 days' },
-    ...s.series.map(d => h('i', { class: 'bar' + (d.views ? '' : ' zero'), style: 'height:' + Math.max(3, Math.round(d.views / max * 100)) + '%', title: short(d.day) + ': ' + d.views + ' views, ' + d.visitors + ' visitors' })));
+  const [s, aud] = await Promise.all([api('GET', '/stats?range=' + statRange), api('GET', '/audience').catch(() => ({ values: {} }))]);
+  /* gender and age cannot be seen by the website: the shares are typed in from an analytics tool */
+  const audCard = (title, keys, color) => {
+    const rows = keys.filter(k => aud.values[k] != null).map(k => ({ k: AUDIENCE.find(x => x[0] === k)[1].replace('Age ', ''), n: aud.values[k] }));
+    return h('div', { class: 'card' }, h('h2', {}, title),
+      rows.length ? barList(rows, color, n => n + '%') : h('div', { class: 'empty' }, 'No data yet.'));
+  };
+  const editAudience = () => {
+    const ins = Object.fromEntries(AUDIENCE.map(([k]) => [k, h('input', { type: 'number', min: 0, max: 100, step: '0.1', inputmode: 'decimal', value: aud.values[k] == null ? '' : aud.values[k], placeholder: '0' })]));
+    modal('Visitors by gender and age', h('div', {}, h('p', { class: 'hint', style: 'margin:0 0 12px' }, 'Shares in percent from your analytics tool. Leave a box empty if you do not have it.'), h('div', { class: 'fgrid' }, ...AUDIENCE.map(([k, l]) => field(l + ' (%)', ins[k])))),
+      async () => { await api('PUT', '/audience', { values: Object.fromEntries(AUDIENCE.map(([k]) => [k, ins[k].value])) }); toast('Saved'); go('website'); });
+  };
   const e = s.engagement, v = s.visitors;
   const visitN = k => (v.visit.find(x => x.k === k) || { n: 0 }).n, visitAll = visitN('New') + visitN('Returning');
   const secs = s.sections.slice().sort((a, b) => b.seconds - a.seconds), totalSec = secs.reduce((t, x) => t + x.seconds, 0) || 1;
-  const topTime = secs[0], topClick = s.sections.slice().sort((a, b) => b.clicks - a.clicks)[0];
-  const best = s.sections.filter(x => x.reached >= 3).sort((a, b) => b.avgSeconds - a.avgSeconds)[0];
   const maxT = Math.max(1, ...secs.map(x => x.seconds)), maxC = Math.max(1, ...secs.map(x => x.clicks));
   const table = secs.length ? h('div', { class: 'sectbl', role: 'table' },
     h('div', { class: 'st-row st-head', role: 'row' }, h('span', {}, 'Section'), h('span', {}, 'Time spent'), h('span', {}, 'Avg time per visitor'), h('span', {}, 'Reached'), h('span', {}, 'Clicks')),
@@ -314,30 +400,210 @@ async function viewWebsite(main) {
       h('span', { class: 'st-bar' }, h('span', { class: 'hb-track' }, fill('accent', Math.max(2, Math.round(x.seconds / maxT * 100)))), h('small', {}, Math.round(x.seconds / totalSec * 100) + '%')),
       h('span', {}, dur(x.avgSeconds)), h('span', {}, x.reachPct + '% of visits'),
       h('span', { class: 'st-bar' }, h('span', { class: 'hb-track' }, fill('pink', Math.max(2, Math.round(x.clicks / maxC * 100)))), h('b', {}, num(x.clicks)))))) : h('div', { class: 'empty' }, 'No section data yet. It fills in as people scroll through your website.');
-  main.append(header('Website stats', 'Visits to your portfolio website, counted automatically. Details cover the last 30 days.'),
-    h('div', { class: 'stats' }, stat(num(s.today.views), 'Views today', 'accent', num(s.today.visitors) + ' visitors'), stat(num(s.visitors7), 'Visitors, last 7 days', 'pink'), stat(num(s.views30), 'Views, last 30 days', 'mint', num(s.visitors30) + ' visitors'), stat(num(s.total), 'Views, all time', 'sun', s.since ? 'since ' + short(s.since) : 'No visits yet')),
-    h('div', { class: 'card' }, h('h2', {}, 'Views per day'), bars, h('div', { class: 'baraxis' }, h('span', {}, short(s.series[0].day)), h('span', {}, 'Today')),
-      h('p', { class: 'hint' }, 'A view is one page load. A visitor is one person per day, counted without storing their address. Search engine bots are left out.')),
-
+  const RANGES = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['all', 'Lifetime']], rl = RANGES.find(r => r[0] === statRange)[1].toLowerCase();
+  const filter = h('div', { class: 'tabs rangebar', role: 'group', 'aria-label': 'Time range' }, ...RANGES.map(([k, l]) => h('button', { class: 'tab' + (k === statRange ? ' on' : ''), type: 'button', 'aria-pressed': String(k === statRange), onclick: e => { statRange = k; filter.querySelectorAll('.tab').forEach(t => { const on = t === e.currentTarget; t.classList.toggle('on', on); t.setAttribute('aria-pressed', String(on)); }); go('website'); } }, l)));
+  main.append(header('Website stats', 'Visits to your portfolio website, counted automatically. The filter changes every number below except Visitors today.'), filter,
+    h('div', { class: 'stats' }, stat(num(s.visitorsR), 'Visitors, ' + rl, 'pink'), stat(num(s.clicksR), 'Clicks, ' + rl, 'warm', 'on buttons and links')),
     h('h2', { class: 'sec' }, 'Interest and interaction'),
-    h('div', { class: 'stats' }, stat(dur(e.avgSeconds), 'Average time on site', 'accent', 'per visit'), stat(e.avgScroll + '%', 'Average scroll depth', 'sky', 'how far down the page'), stat(e.bounceRate + '%', 'Left within 10 seconds', 'warm', 'with no click'), stat(visitAll ? Math.round(visitN('Returning') / visitAll * 100) + '%' : '-', 'Returning visitors', 'mint', num(visitN('Returning')) + ' returning, ' + num(visitN('New')) + ' new')),
-    h('div', { class: 'stats picks' },
-      stat(topTime ? secName(topTime.id) : '-', 'Most time spent', 'sun', topTime ? Math.round(topTime.seconds / totalSec * 100) + '% of all reading time' : 'Not enough data yet'),
-      stat(topClick && topClick.clicks ? secName(topClick.id) : '-', 'Most clicks', 'pink', topClick && topClick.clicks ? num(topClick.clicks) + ' clicks' : 'Not enough data yet'),
-      stat(best ? secName(best.id) : '-', 'People stay longest on', 'accent', best ? 'about ' + dur(best.avgSeconds) + ' each' : 'Not enough data yet')),
+    h('div', { class: 'stats' }, stat(num(s.today.visitors), 'Visitors today', 'sun'), stat(dur(e.avgSeconds), 'Average time on site', 'accent', 'per visit'), stat(e.bounceRate + '%', 'Left within 10 seconds', 'warm', 'with no click'), stat(visitAll ? Math.round(visitN('Returning') / visitAll * 100) + '%' : '-', 'Returning visitors', 'mint', num(visitN('Returning')) + ' returning, ' + num(visitN('New')) + ' new')),
     h('div', { class: 'card' }, h('h2', {}, 'Section by section'), table,
       h('p', { class: 'hint' }, 'Time spent counts while a section is in the middle of the screen and the visitor is active. Reached is the share of visits that scrolled to it.')),
-    h('div', { class: 'card' }, h('h2', {}, 'What visitors click'), barList(s.actions, 'warm')),
 
     h('h2', { class: 'sec' }, 'Who visits'),
     h('div', { class: 'two' },
-      h('div', { class: 'card' }, h('h2', {}, 'Device'), barList(v.device, 'accent')),
-      h('div', { class: 'card' }, h('h2', {}, 'Where they come from'), barList(v.source, 'pink'))),
-    h('div', { class: 'two' },
-      h('div', { class: 'card' }, h('h2', {}, 'Browser'), barList(v.browser, 'sky')),
-      h('div', { class: 'card' }, h('h2', {}, 'Operating system'), barList(v.os, 'mint'))),
-    h('div', { class: 'card' }, h('h2', {}, 'Location'), barList(v.place.map(x => ({ k: placeName(x.k), n: x.n })), 'sun'),
-      h('p', { class: 'hint' }, 'Taken from the visitor\'s device time zone, so it shows a region or city, not an exact place. Counts are visits.')));
+      h('div', { class: 'stack' },
+        h('div', { class: 'card' }, h('h2', {}, 'Device'), barList(v.device, 'accent')),
+        audCard('Gender', ['women', 'men'], 'pink'),
+        audCard('Age group', ['age16_20', 'age20_24', 'age24_28', 'age30_40', 'age40_50', 'age50_60', 'age60'], 'accent')),
+      h('div', { class: 'stack' },
+        h('div', { class: 'card' }, h('h2', {}, 'Where they come from'), barList(v.source, 'pink')),
+        h('div', { class: 'card' }, h('h2', {}, 'Operating system'), barList(v.os, 'mint')))),
+    h('div', { class: 'card' }, h('h2', {}, 'Top 5 countries'), barList(v.place, 'sun'),
+      h('p', { class: 'hint' }, 'Worked out from the visitor\'s device time zone. Counts are visits.')));
+}
+
+
+/* ---------- Items found on the website: every image, video, file and text of the website, found automatically ---------- */
+let slotData = { registry: [], values: {}, scannedAt: 0 };
+const SLOT_COLORS = ['pink', 'sky', 'mint', 'warm', 'sun', 'accent'];
+const KIND_NAME = { image: 'Image', video: 'Video', file: 'PDF / file', text: 'Text' };
+/* Which menu page already looks after an item. Items with no home page are left alone. */
+const SLOT_HOME = x => {
+  const c = (x.context || '').toLowerCase();
+  if (x.section === 'work') return c.includes('brand identit') ? 'work-branding' : c.includes('image editing') ? 'work-editing' : c.includes('image composition') ? 'work-composition' : null;
+  return { music: 'music', feedback: 'feedbacks', faq: 'questions' }[x.section] || null;
+};
+async function refreshSlots() { try { slotData = await api('GET', '/slots'); } catch {} }
+/* the website itself lists what can be replaced: it is opened in a hidden frame and asked */
+async function scanSite() {
+  if (window.__SITE_HTML__) { await api('POST', '/slots/scan', { slots: [] }); return; }
+  const f = h('iframe', { src: '/?preview=1', 'aria-hidden': 'true', tabindex: '-1', style: 'position:fixed;left:-9999px;top:0;width:1280px;height:900px;border:0' });
+  document.body.append(f);
+  try {
+    await new Promise((ok, no) => { f.onload = ok; setTimeout(() => no(new Error('The website did not load')), 15000); });
+    await new Promise(r => setTimeout(r, 900));
+    if (!f.contentWindow.SR_scan) throw new Error('The website has no live.js, so it cannot be scanned');
+    await api('POST', '/slots/scan', { slots: f.contentWindow.SR_scan() });
+  } finally { f.remove(); }
+}
+/* the cards for a list of items: images, videos, PDFs and texts, each replaced with one upload */
+function slotCards(items, title) {
+  const label = x => KIND_NAME[x.kind] + ' ' + x.n;
+  const save = async (x, value) => { await api('PUT', '/slots', { key: x.key, value }); toast('Saved'); go(current); };
+  const card = x => {
+    const cur = slotData.values[x.key], v = cur && cur.value;
+    const pick = (accept, max, what) => {
+      const inp = h('input', { type: 'file', accept, hidden: true, onchange: wrap(async () => {
+        const f = inp.files[0]; if (!f) return;
+        if (f.size > max * 1024 * 1024) { inp.value = ''; throw new Error(what + ' is larger than ' + max + ' MB'); }
+        const up = await api('POST', '/upload', { dataUrl: await readDataUrl(f) }); await save(x, up.url);
+      }) });
+      return [inp, h('button', { class: 'btn sm solid', type: 'button', onclick: () => inp.click() }, v ? 'Replace' : 'Upload')];
+    };
+    let body, ctl;
+    if (x.kind === 'image') { body = (v || x.current) ? h('img', { class: 'slot-prev', src: v || x.current, alt: '' }) : h('div', { class: 'slot-prev slot-art' }, 'Original artwork'); ctl = pick('image/png,image/jpeg,image/webp', 5, 'The image'); }
+    else if (x.kind === 'video') { body = v ? h('video', { class: 'slot-prev', src: v, controls: true, preload: 'metadata' }) : h('div', { class: 'slot-prev slot-art' }, 'Original placeholder'); ctl = pick('video/mp4,video/webm', 25, 'The video'); }
+    else if (x.kind === 'file') { body = h('p', { class: 'hint', style: 'margin:0' }, (v || x.current || 'No file') ); ctl = pick('application/pdf', 10, 'The PDF'); }
+    else {
+      const t = h('textarea', { rows: 3, maxlength: 1000 }, v != null ? v : x.current); body = t;
+      ctl = [h('button', { class: 'btn sm solid', type: 'button', onclick: wrap(() => save(x, t.value)) }, 'Save text')];
+    }
+    const reset = v ? h('button', { class: 'btn sm', type: 'button', onclick: wrap(() => save(x, null)) }, 'Use original') : null;
+    const dropInp = ctl && ctl[0] && ctl[0].tagName === 'INPUT' ? ctl[0] : null;
+    const cardEl = h('div', { class: 'card slot' }, h('div', { class: 'cardhead' }, h('h2', {}, label(x)), v ? h('span', { class: 'tag' }, 'Replaced') : null), x.context ? h('p', { class: 'hint', style: 'margin:-6px 0 0' }, 'Under: ' + x.context) : null, body, h('div', { class: 'slot-ctl' }, ...ctl, reset), dropInp ? h('p', { class: 'hint dz-note' }, 'or drag and drop a file onto this card') : null);
+    if (dropInp) wireDrop(cardEl, dropInp);
+    return cardEl;
+  };
+  const out = [h('h2', { class: 'sec' }, title ? title + ': images, videos, PDFs and texts' : 'Images, videos, PDFs and texts'),
+    h('p', { class: 'hint', style: 'margin:-6px 0 12px' }, 'Found on the website automatically. Each change is saved as soon as you upload it. Press Apply on main website to write it into the HTML file.')];
+  for (const k of ['image', 'video', 'file', 'text']) {
+    const list = items.filter(x => x.kind === k); if (!list.length) continue;
+    out.push(h('h3', { class: 'sub' }, { image: 'Images', video: 'Videos', file: 'PDFs and files', text: 'Texts' }[k]), h('div', { class: 'grid2' }, ...list.map(card)));
+  }
+  return out;
+}
+
+
+/* ---------- dashboard: Instagram, Facebook and LinkedIn insights (typed in, since these networks do not share them with this panel) ---------- */
+const INS = {
+  instagram: { label: 'Instagram', where: 'the Instagram app under Professional dashboard > Insights', kinds: [['reels', 'Reels'], ['posts', 'Posts']] },
+  facebook: { label: 'Facebook page', where: 'Meta Business Suite under Insights', kinds: [['reels', 'Reels'], ['posts', 'Posts']] },
+  linkedin: { label: 'LinkedIn', where: 'LinkedIn under Analytics', kinds: [['videos', 'Videos'], ['posts', 'Posts']] },
+};
+const RANGES4 = [['total', 'Total'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['life', 'Lifetime']];
+const ENG = [['likes', 'Likes'], ['comments', 'Comments'], ['reposts', 'Reposts'], ['saves', 'Saves'], ['shares', 'Shares']];
+const insR = {}, insWk = {};
+const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+const addDays = (d, n) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); return x; };
+async function viewInsights(main, key) {
+  const P = INS[key], D = (await api('GET', '/insights'))[key], kinds = P.kinds;
+  const rg = (r, sec) => (D.ranges[r] && D.ranges[r][sec]) || {};
+  const total = o => Object.values(o).reduce((t, v) => t + (Number(v) || 0), 0);
+  const has = o => Object.keys(o).length > 0;
+  /* views for a range: summed from the daily entries when there are any, otherwise the totals typed for that range */
+  const viewsFor = r => {
+    const today = new Date(), from = r === '7' ? ymd(addDays(today, -6)) : r === '30' ? ymd(addDays(today, -29)) : null, o = Object.fromEntries(kinds.map(([k]) => [k, 0])); let any = false;
+    if (r !== 'life') for (const [d, v] of Object.entries(D.daily)) { if (from && d < from) continue; any = true; kinds.forEach(([k]) => { o[k] += Number(v[k] || 0); }); }
+    if (any) return { vals: o, src: 'Added up from your daily numbers below' };
+    const t = rg(r, 'views'); return has(t) ? { vals: t, src: 'Typed from ' + P.label } : { vals: null, src: '' };
+  };
+  const dash = v => v == null ? '-' : num(v);
+  const rangeTabs = (id, r, set) => h('div', { class: 'tabs rangebar', role: 'group', 'aria-label': 'Time range' }, ...RANGES4.map(([k, l]) => h('button', { class: 'tab' + (k === r ? ' on' : ''), type: 'button', 'aria-pressed': String(k === r), onclick: () => { insR[id] = k; set(); } }, l)));
+  /* a section card: title, its own range filter, an Edit numbers button and a body drawn for the chosen range */
+  const section = (id, title, sub, edit, body) => {
+    const box = h('div', { class: 'card ins' }), draw = () => {
+      const r = insR[key + id] || '30', tabs = rangeTabs(key + id, r, draw);
+      box.replaceChildren(h('div', { class: 'cardhead' }, h('h2', {}, title), edit ? h('button', { class: 'btn sm', type: 'button', onclick: () => edit(r) }, 'Edit numbers') : null), tabs, ...(sub ? [h('p', { class: 'hint', style: 'margin:10px 0 0' }, sub)] : []), ...[].concat(body(r)).filter(Boolean));
+    };
+    draw(); return box;
+  };
+  const rLabel = r => RANGES4.find(x => x[0] === r)[1].toLowerCase();
+  const save = async (section, range, data, done) => { await api('PUT', '/insights', { platform: key, section, range, data }); toast('Saved'); go(current); };
+  const numInputs = (fields, cur, max) => Object.fromEntries(fields.map(([f]) => [f, h('input', { type: 'number', min: 0, max, step: '1', inputmode: 'decimal', value: cur[f] == null ? '' : cur[f], placeholder: '0' })]));
+  const readNums = ins => Object.fromEntries(Object.entries(ins).map(([f, el]) => [f, el.value]));
+  const simpleEdit = (sec, title, fields) => r => {
+    const ins = numInputs(fields, rg(r, sec));
+    modal(title + ', ' + rLabel(r), h('div', {}, h('p', { class: 'hint', style: 'margin:0 0 12px' }, 'Type the numbers for ' + rLabel(r) + ' from ' + P.where + '. Leave a box empty if you do not have it.'), h('div', { class: 'fgrid' }, ...fields.map(([f, l]) => field(l, ins[f])))),
+      () => save(sec, r, readNums(ins)));
+  };
+  const tiles = (fields, vals, colors) => h('div', { class: 'stats' }, ...fields.map(([f, l], i) => stat(vals && vals[f] != null ? num(vals[f]) : '-', l, colors[i % colors.length])));
+  const COL = ['pink', 'accent', 'sun', 'mint', 'warm'];
+
+  /* ---- views ---- */
+  const wkOff = () => insWk[key] || 0;
+  const weekBlock = () => {
+    const box = h('div', { class: 'wkbox' });
+    const draw = () => {
+      const now = new Date(), dow = (now.getDay() + 6) % 7, start = addDays(now, -dow + wkOff() * 7), days = Array.from({ length: 7 }, (_, i) => addDays(start, i)), today = ymd(now);
+      const get = (d, k) => { const v = D.daily[ymd(d)]; return v && v[k] != null ? v[k] : null; };
+      const max = Math.max(1, ...days.flatMap(d => kinds.map(([k]) => get(d, k) || 0)));
+      const col = ['pink', 'accent'];
+      const chart = h('div', { class: 'wk', role: 'img', 'aria-label': 'Views per day this week' }, ...days.map(d => h('div', { class: 'wk-col' },
+        h('div', { class: 'wk-bars' }, ...kinds.map(([k], i) => { const v = get(d, k); return h('div', { class: 'wk-b' }, h('small', {}, v == null ? '' : num(v)), h('i', { style: 'height:' + (v ? Math.max(3, Math.round(v / max * 150)) : 0) + 'px;background:' + COLORS[col[i]][0] })); })),
+        h('span', { class: 'wk-day' }, d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric' })))));
+      const ins = {}; for (const d of days) for (const [k] of kinds) ins[ymd(d) + k] = h('input', { type: 'number', min: 0, step: '1', inputmode: 'numeric', 'aria-label': k + ' on ' + ymd(d), value: get(d, k) == null ? '' : get(d, k), placeholder: '0', disabled: ymd(d) > today });
+      const grid = h('div', { class: 'wk-in' }, ...days.map(d => h('div', {}, h('span', {}, d.toLocaleDateString('en-IN', { weekday: 'short' })), ...kinds.map(([k]) => ins[ymd(d) + k]))));
+      const rows = kinds.map(([k, l], i) => h('span', { class: 'wk-key' }, h('i', { style: 'background:' + COLORS[col[i]][0] }), l));
+      const range = days[0].toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) + ' to ' + days[6].toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+      box.replaceChildren(
+        h('div', { class: 'wk-head' }, h('div', { class: 'wk-nav' }, h('button', { class: 'btn sm', type: 'button', onclick: () => { insWk[key] = wkOff() - 1; draw(); } }, 'Previous week'), h('b', {}, range), h('button', { class: 'btn sm', type: 'button', disabled: wkOff() >= 0, onclick: () => { insWk[key] = wkOff() + 1; draw(); } }, 'Next week')), h('div', { class: 'wk-keys' }, ...rows)),
+        chart,
+        h('p', { class: 'hint' }, 'Type how many views each day got, from ' + P.where + '. One row per day, ' + kinds.map(x => x[1]).join(' then ') + '.'),
+        grid, h('div', { class: 'wk-save' }, h('button', { class: 'btn solid', type: 'button', onclick: wrap(async () => {
+          const out = {}; for (const d of days) { if (ymd(d) > today) continue; out[ymd(d)] = Object.fromEntries(kinds.map(([k]) => [k, ins[ymd(d) + k].value])); }
+          await api('PUT', '/insights/daily', { platform: key, days: out }); toast('Saved'); go(current);
+        }) }, 'Save this week')));
+    };
+    draw(); return box;
+  };
+  const viewsSec = section('views', 'Views', null, simpleEdit('views', 'Views', kinds), r => {
+    const v = viewsFor(r);
+    return [tiles([['all', 'All views'], ...kinds], v.vals ? { all: total(v.vals), ...v.vals } : null, COL), v.src ? h('p', { class: 'hint', style: 'margin:0' }, v.src + '.') : h('p', { class: 'hint', style: 'margin:0' }, 'Nothing for this range yet. Add your daily numbers below or press Edit numbers.'), h('h3', { class: 'sub' }, 'Views per day, week by week'), weekBlock()];
+  });
+
+  /* ---- followers ---- */
+  const folEdit = r => {
+    const cnt = numInputs([['count', 'Followers']], rg(r, 'followers')), g = numInputs(AUDIENCE.slice(0, 2), rg(r, 'gender'), 100), a = numInputs(AUDIENCE.slice(2), rg(r, 'age'), 100);
+    const rows = []; const place = (x = {}) => { const k = h('input', { type: 'text', maxlength: 60, placeholder: 'City or country', value: x.k || '' }), n = h('input', { type: 'number', min: 0, max: 100, step: '0.1', placeholder: '%', value: x.n == null ? '' : x.n }); rows.push({ k, n }); return h('div', { class: 'plrow' }, k, n); };
+    const old = rg(r, 'places'), plist = Array.isArray(D.ranges[r] && D.ranges[r].places) ? D.ranges[r].places : []; void old;
+    const pbox = h('div', { class: 'pl' }, ...Array.from({ length: 6 }, (_, i) => place(plist[i])));
+    modal('Followers, ' + rLabel(r), h('div', {}, h('p', { class: 'hint', style: 'margin:0 0 12px' }, 'From ' + P.where + '. ' + (r === '7' || r === '30' ? 'For this range type the followers you gained.' : 'Type your total followers.') + ' Gender, age and location are in percent.'),
+      h('div', { class: 'fgrid' }, field(r === '7' || r === '30' ? 'New followers' : 'Total followers', cnt.count)),
+      h('h2', { class: 'sub' }, 'Gender (%)'), h('div', { class: 'fgrid' }, ...AUDIENCE.slice(0, 2).map(([f, l]) => field(l, g[f]))),
+      h('h2', { class: 'sub' }, 'Age group (%)'), h('div', { class: 'fgrid' }, ...AUDIENCE.slice(2).map(([f, l]) => field(l.replace('Age ', ''), a[f]))),
+      h('h2', { class: 'sub' }, 'Top locations (%)'), pbox),
+      async () => {
+        await api('PUT', '/insights', { platform: key, range: r, section: 'followers', data: readNums(cnt) });
+        await api('PUT', '/insights', { platform: key, range: r, section: 'gender', data: readNums(g) });
+        await api('PUT', '/insights', { platform: key, range: r, section: 'age', data: readNums(a) });
+        await api('PUT', '/insights', { platform: key, range: r, section: 'places', data: { rows: rows.map(x => ({ k: x.k.value.trim(), n: x.n.value })) } });
+        toast('Saved'); go(current);
+      });
+  };
+  const folSec = section('followers', 'Followers', null, folEdit, r => {
+    const f = rg(r, 'followers'), g = rg(r, 'gender'), a = rg(r, 'age'), pl = (D.ranges[r] && D.ranges[r].places) || [];
+    const bars = (title, rows, color) => h('div', { class: 'card flat' }, h('h2', {}, title), barList(rows, color, n => n + '%'));
+    return [h('div', { class: 'stats' }, stat(dash(f.count), r === '7' || r === '30' ? 'New followers' : 'Total followers', 'pink', rLabel(r))),
+      h('div', { class: 'three' },
+        bars('Gender', AUDIENCE.slice(0, 2).filter(([k]) => g[k] != null).map(([k, l]) => ({ k: l, n: g[k] })), 'pink'),
+        bars('Age group', AUDIENCE.slice(2).filter(([k]) => a[k] != null).map(([k, l]) => ({ k: l.replace('Age ', ''), n: a[k] })), 'accent'),
+        bars('Location', pl.map(x => ({ k: x.k, n: x.n })), 'sun'))];
+  });
+
+  /* ---- content ---- */
+  const conSec = section('content', 'Content', null, simpleEdit('content', 'Content posted', kinds), r => {
+    const c = rg(r, 'content');
+    return [tiles([['all', 'All content'], ...kinds], has(c) ? { all: total(c), ...c } : null, ['mint', 'pink', 'accent']), has(c) ? null : h('p', { class: 'hint', style: 'margin:0' }, 'Nothing for this range yet. Press Edit numbers.')].filter(Boolean);
+  });
+
+  /* ---- engagement ---- */
+  const engSec = section('engagement', 'Engagement', null, simpleEdit('engagement', 'Engagement', ENG), r => {
+    const e = rg(r, 'engagement');
+    return [tiles(ENG, has(e) ? e : null, ['pink', 'accent', 'sun', 'mint', 'warm']), has(e) ? h('div', { class: 'card flat' }, h('h2', {}, 'Share of each kind'), barList(ENG.filter(([k]) => e[k]).map(([k, l]) => ({ k: l, n: e[k] })).sort((a, b) => b.n - a.n), 'accent')) : h('p', { class: 'hint', style: 'margin:0' }, 'Nothing for this range yet. Press Edit numbers.')];
+  });
+
+  main.append(header(P.label + ' stats', D.updated ? 'Last updated ' + fmtDate(D.updated) + '. ' + P.label + ' does not share these numbers with this panel, so you type them in from ' + P.where + '.' : P.label + ' does not share its numbers with this panel. Type them in from ' + P.where + '.'),
+    viewsSec, folSec, conSec, engSec);
 }
 
 /* ---------- dashboard: social profiles (numbers typed in, since these networks do not share them with this panel) ---------- */
@@ -365,55 +631,84 @@ async function viewSocial(main, key) {
 }
 
 /* ---------- work: pieces in one category (logo, social media, brochures, banners, other printables) ---------- */
+const WORK_SIZE = { ...Object.fromEntries(Object.keys(WORK).map(k => [k, [1080, 1350]])), branding: [1920, 1080] }; /* 1080 x 1350 px (portrait) uploads; Branding: a 1920 x 1080 thumbnail plus a PDF */
 async function viewWork(main, cat) {
+  const size = WORK_SIZE[cat] || null, shape = size ? (size[0] === size[1] ? ' sq' : size[0] > size[1] ? ' ls' : ' pt') : '', needPdf = cat === 'branding';
   const [label, color, example] = WORK[cat];
   const data = await api('GET', '/work?category=' + cat);
   /* pending = a newly chosen image that uploads when you press Save */
-  const draft = data.map(w => ({ title: w.title, label: w.label, image: w.image, published: w.published, pending: null }));
+  const draft = data.map(w => ({ title: w.title, label: w.label, image: w.image, file: w.file || '', published: w.published, pending: null, pfile: null }));
   /* Image composition also controls the Before / After slider of the website */
   const cmp = cat === 'composition' ? { ...(await api('GET', '/compare')), pb: null, pa: null } : null;
+  /* Image editing also controls the video box of the website: a YouTube link that plays right there */
+  const ev = cat === 'editing' ? await api('GET', '/editvideo') : null;
   const bar = savebar({ view: 'work-' + cat, onSave: async () => {
-    for (const w of draft) if (w.pending) { const up = await api('POST', '/upload', { dataUrl: w.pending }); w.image = up.url; w.pending = null; }
+    for (const w of draft) {
+      if (w.pending) { const up = await api('POST', '/upload', { dataUrl: w.pending }); w.image = up.url; w.pending = null; }
+      if (w.pfile) { const up = await api('POST', '/upload', { dataUrl: w.pfile.dataUrl }); w.file = up.url; w.pfile = null; }
+    }
     if (cmp) {
       if (cmp.pb) { cmp.before = (await api('POST', '/upload', { dataUrl: cmp.pb })).url; cmp.pb = null; }
       if (cmp.pa) { cmp.after = (await api('POST', '/upload', { dataUrl: cmp.pa })).url; cmp.pa = null; }
       await api('PUT', '/compare', { before: cmp.before, after: cmp.after });
     }
-    await api('PUT', '/work', { category: cat, items: draft.map(({ title, label, image, published }) => ({ title, label, image, published })) });
+    if (ev) { const id = ytId(ev.url || ''); if (ev.url && !id) throw new Error('Paste a valid YouTube video link'); await api('PUT', '/editvideo', { url: id ? 'https://www.youtube.com/watch?v=' + id : '' }); }
+    await api('PUT', '/work', { category: cat, items: draft.map(({ title, label, image, file, published }) => ({ title, label, image, file, published })) });
   } });
   const rows = h('div', { class: 'list' });
   const touch = () => { bar.mark(); draw(); };
   const move = (i, d) => { [draft[i], draft[i + d]] = [draft[i + d], draft[i]]; touch(); };
-  const wthumb = w => { const src = w.pending || (THUMBS && w.image); const b = h('div', { class: 'wthumb', color }); if (src) { const img = h('img', { src, alt: '' }); img.addEventListener('error', () => img.remove()); b.append(img); } else b.append(h('i', { 'aria-hidden': 'true' })); return b; };
+  const wthumb = w => { const src = w.pending || imgSrc(w.image); const b = h('div', { class: 'wthumb', color }); if (src) { const img = h('img', { src, alt: '' }); img.addEventListener('error', () => img.remove()); b.append(img); } else b.append(h('i', { 'aria-hidden': 'true' })); return b; };
   const row = (w, i) => h('div', { class: 'item trow' }, wthumb(w),
-    h('div', { class: 'trk' }, h('h3', {}, w.title), h('p', { class: 'meta' }, w.label || 'No detail line'),
+    h('div', { class: 'trk' }, h('h3', {}, w.title), h('p', { class: 'meta' }, (w.label || 'No detail line') + (needPdf ? ((w.pfile || w.file) ? ' · PDF attached' : ' · No PDF yet') : '')),
       h('span', { class: 'pill', color: w.published ? 'mint' : 'sun' }, w.published ? 'On website' : 'Hidden')),
     h('div', { class: 'acts' },
       h('button', { class: 'btn sm', type: 'button', disabled: i === 0, 'aria-label': 'Move up', onclick: () => move(i, -1) }, 'Up'),
       h('button', { class: 'btn sm', type: 'button', disabled: i === draft.length - 1, 'aria-label': 'Move down', onclick: () => move(i, 1) }, 'Down'),
       h('button', { class: 'btn sm', type: 'button', onclick: () => workForm(w, touch) }, 'Edit'),
       h('button', { class: 'btn sm danger', type: 'button', onclick: () => { draft.splice(i, 1); touch(); } }, 'Remove')));
-  const draw = () => rows.replaceChildren(...(draft.length ? draft.map(row) : [h('div', { class: 'empty' }, 'No pieces yet. Until you add one, your website keeps its sample ' + label.toLowerCase() + ' tiles.')]));
+  /* How the pieces look on the website: each one is a slide in the "Work that earns attention" gallery, in this order */
+  const slides = h('div', { class: 'slides' + shape, role: 'list' });
+  const drawSlides = () => {
+    const live = draft.filter(w => w.published);
+    slides.replaceChildren(...(live.length ? live.map((w, i) => h('div', { class: 'slide', role: 'listitem' },
+      h('div', { class: 'slide-art', color }, (w.pending || imgSrc(w.image)) ? h('img', { src: w.pending || imgSrc(w.image), alt: w.title }) : h('i', { 'aria-hidden': 'true' }), h('span', { class: 'slide-idx' }, String(i + 1).padStart(2, '0'))),
+      h('div', { class: 'slide-cap' }, h('b', {}, w.title), h('small', {}, w.label || ' '))))
+      : [h('div', { class: 'empty' }, 'Nothing to show yet. Your website keeps its sample ' + label.toLowerCase() + ' slides until you add a piece.')]));
+  };
+  const draw = () => { rows.replaceChildren(...(draft.length ? draft.map(row) : [h('div', { class: 'empty' }, 'No pieces yet. Until you add one, your website keeps its sample ' + label.toLowerCase() + ' tiles.')])); drawSlides(); };
   const workForm = (w, done) => {
     const v = w || { title: '', label: '', image: '', published: true, pending: null };
-    let pending = v.pending, shown = v.pending || (THUMBS && v.image) || '';
-    const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif' });
+    let pending = v.pending, shown = v.pending || imgSrc(v.image) || '';
+    const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp' });
     const prev = h('div', { class: 'tprev' });
-    const paint = () => prev.replaceChildren(h('div', { class: 'wthumb big', color }, shown ? h('img', { src: shown, alt: 'Preview' }) : h('i', { 'aria-hidden': 'true' })));
+    const sizeNote = h('p', { class: 'hint' });
+    /* pieces are 1080 x 1080 squares: the preview is square, and an image of another size gets a gentle note */
+    const sz = size ? size[0] + ' x ' + size[1] + ' px' : '';
+    const checkSize = src => { sizeNote.textContent = ''; sizeNote.className = 'hint'; if (!src || !size) return; const im = new Image(); im.onload = () => { const ok = im.naturalWidth === size[0] && im.naturalHeight === size[1]; sizeNote.textContent = ok ? 'Size ' + sz + '. Perfect.' : 'This image is ' + im.naturalWidth + ' x ' + im.naturalHeight + ' px. Use ' + sz + ' so nothing is cropped.'; sizeNote.className = 'hint ' + (ok ? 'good' : 'badtxt'); }; im.src = src; };
+    const paint = () => prev.replaceChildren(h('div', { class: 'wthumb big' + shape, color }, shown ? h('img', { src: shown, alt: 'Preview' }) : h('i', { 'aria-hidden': 'true' })));
     file.addEventListener('change', wrap(async () => {
       const f = file.files[0]; if (!f) return;
       if (f.size > 5 * 1024 * 1024) { file.value = ''; throw new Error('Image is larger than 5 MB'); }
-      pending = await readDataUrl(f); shown = pending; paint();
+      pending = await readDataUrl(f); shown = pending; paint(); checkSize(pending);
     }));
     const title = h('input', { type: 'text', value: v.title, required: true, maxlength: 80, placeholder: 'Orbit Coffee' });
     const lab = h('input', { type: 'text', value: v.label, maxlength: 80, placeholder: example });
     const pub = h('input', { type: 'checkbox', checked: v.published });
+    /* Branding: the full brand identity as a PDF, opened from the card on the website */
+    let pfile = v.pfile || null;
+    const pdf = h('input', { type: 'file', accept: 'application/pdf' }), pdfName = h('p', { class: 'hint' });
+    const showPdf = () => { pdfName.textContent = pfile ? 'New PDF: ' + pfile.name : v.file ? 'Current PDF: ' + v.file.split('/').pop() : 'No PDF chosen yet.'; };
+    pdf.addEventListener('change', wrap(async () => { const f = pdf.files[0]; if (!f) return; if (f.size > 10 * 1024 * 1024) { pdf.value = ''; throw new Error('PDF is larger than 10 MB'); } pfile = { name: f.name, dataUrl: await readDataUrl(f) }; showPdf(); pdfName.textContent += ' · making the thumbnail...';
+      try { pending = await pdfThumb(f); shown = pending; paint(); showPdf(); } catch (e) { pfile = null; pdf.value = ''; showPdf(); throw new Error('Could not read this PDF. Try another file.'); } }));
+    showPdf();
     paint();
-    modal(w ? 'Edit piece' : 'Add piece', h('div', {}, field('Image', file, w ? 'Choose a new image to replace the current one. PNG, JPG, WebP or GIF up to 5 MB.' : 'PNG, JPG, WebP or GIF up to 5 MB.'), prev, field('Title', title), field('Detail line', lab, 'Small text under the title, for example ' + example + '.'), h('label', { class: 'check' }, pub, 'Show on the website')),
+    modal(w ? 'Edit piece' : 'Add piece', h('div', {}, ...(needPdf ? [field('Branding PDF', dropBox(pdf), 'Upload the full brand identity as a PDF, up to 10 MB. The 1920 x 1080 thumbnail is made from its first page.'), pdfName, prev] : [field('Image', dropBox(file), (w ? 'Choose a new image to replace the current one. ' : '') + (size ? 'Size ' + sz + (size[0] === size[1] ? ' (square)' : ' (portrait)') + '. ' : '') + 'PNG, JPG or WebP up to 5 MB.'), prev, sizeNote]), field('Title', title), field('Detail line', lab, 'Small text under the title, for example ' + example + '.'), h('label', { class: 'check' }, pub, 'Show on the website')),
       async () => {
         if (!title.value.trim()) throw new Error('Add a title');
-        if (!pending && !v.image) throw new Error('Choose an image');
-        const rec = { title: title.value.trim(), label: lab.value.trim(), published: pub.checked, pending: pending || null, image: v.image };
+        if (!pending && !v.image) throw new Error(needPdf ? 'Choose the branding PDF' : 'Choose an image');
+        if (needPdf && !pfile && !v.file) throw new Error('Choose the branding PDF');
+        const rec = { title: title.value.trim(), label: lab.value.trim(), published: pub.checked, pending: pending || null, image: v.image, file: v.file || '', pfile };
         if (w) Object.assign(w, rec); else draft.push(rec);
         done();
       }, w ? 'Update piece' : 'Add piece');
@@ -421,8 +716,8 @@ async function viewWork(main, cat) {
   /* Before / After card (Image composition only): two pictures for the slider on the website */
   const compareCard = () => {
     const slot = (key, pend, name) => {
-      const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', 'aria-label': name + ' image' }), prev = h('div', { class: 'tprev' });
-      const paint = () => { const src = cmp[pend] || (THUMBS && cmp[key]); prev.replaceChildren(h('div', { class: 'wthumb big', color: 'accent' }, src ? h('img', { src, alt: name + ' preview' }) : h('i', { 'aria-hidden': 'true' }))); clear.hidden = !(cmp[pend] || cmp[key]); };
+      const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', 'aria-label': name + ' image' }), prev = h('div', { class: 'tprev' });
+      const paint = () => { const src = cmp[pend] || imgSrc(cmp[key]); prev.replaceChildren(h('div', { class: 'wthumb big', color: 'accent' }, src ? h('img', { src, alt: name + ' preview' }) : h('i', { 'aria-hidden': 'true' }))); clear.hidden = !(cmp[pend] || cmp[key]); drawPrev(); };
       const clear = h('button', { class: 'btn sm', type: 'button', onclick: () => { cmp[pend] = null; cmp[key] = ''; file.value = ''; paint(); bar.mark(); } }, 'Remove');
       file.addEventListener('change', wrap(async () => {
         const f = file.files[0]; if (!f) return;
@@ -430,13 +725,35 @@ async function viewWork(main, cat) {
         cmp[pend] = await readDataUrl(f); paint(); bar.mark();
       }));
       paint();
-      return h('div', {}, field(name + ' image', file, 'PNG, JPG, WebP or GIF up to 5 MB.'), prev, clear);
+      return h('div', {}, field(name + ' image', dropBox(file), 'PNG, JPG or WebP up to 5 MB.'), prev, clear);
     };
     return h('div', { class: 'card' }, h('h2', {}, 'Before and After slider'),
       h('p', { class: 'hint', style: 'margin:6px 0 14px' }, 'The "Image composition skills" slider on your website. Visitors drag it to compare the two pictures. Add both, or remove both to show the sample slider again. Use two pictures of the same size for the best result.'),
       h('div', { class: 'ba-form' }, slot('before', 'pb', 'Before'), slot('after', 'pa', 'After')));
   };
-  main.append(header(label, 'Pieces shown under "' + label + '" in the Work section of your website. The top one shows first.', h('button', { class: 'btn solid', type: 'button', onclick: () => workForm(null, touch) }, 'Add piece')), ...(cmp ? [compareCard(), h('div', { style: 'height:18px' })] : []), rows, bar.el);
+  function videoCard() {
+    const inp = h('input', { type: 'url', value: ev.url || '', placeholder: 'https://www.youtube.com/watch?v=...', autocomplete: 'off', 'aria-label': 'YouTube video link' });
+    const hint = h('p', { class: 'hint' }), tp = h('div', { class: 'tprev vprev' });
+    const check = () => {
+      const v = inp.value.trim(), id = ytId(v); tp.replaceChildren();
+      if (!v) { hint.textContent = 'Paste a YouTube link. Leave it empty to show the original video box.'; hint.className = 'hint'; drawPrev(); return; }
+      if (id) tp.append(thumb(v)); hint.textContent = id ? 'Link looks good. This thumbnail shows on the website; the video plays when a visitor presses play.' : 'This is not a YouTube video link.'; hint.className = 'hint ' + (id ? 'good' : 'badtxt'); drawPrev();
+    };
+    inp.addEventListener('input', () => { ev.url = inp.value.trim(); bar.mark(); check(); });
+    check();
+    return h('div', { class: 'card' }, h('h2', {}, 'Video on your website'), h('p', { class: 'hint', style: 'margin:0 0 12px' }, 'Plays inside the video box of "Image editing skills" on your website.'), field('YouTube video link', inp), hint, tp);
+  }
+  const pvBody = h('div', {});
+  const drawPrev = () => {
+    if (ev) { const id = ytId(ev.url || ''); pvBody.replaceChildren(id ? h('div', { class: 'tprev vprev' }, thumb(ev.url)) : h('div', { class: 'empty' }, 'No video link yet. Your website keeps its original video box.')); }
+    else if (cmp) {
+      const one = (key, pend, name) => { const src = cmp[pend] || imgSrc(cmp[key]); return h('div', {}, h('div', { class: 'wthumb big', color }, src ? h('img', { src, alt: name }) : h('i', { 'aria-hidden': 'true' })), h('p', { class: 'hint', style: 'margin:6px 0 0' }, name)); };
+      pvBody.replaceChildren((cmp.before || cmp.pb || cmp.after || cmp.pa) ? h('div', { class: 'ba-form' }, one('before', 'pb', 'Before'), one('after', 'pa', 'After')) : h('div', { class: 'empty' }, 'No pictures yet. Your website keeps its sample slider.'));
+    }
+  };
+  const prevCard = () => { drawPrev(); return h('div', { class: 'card' }, h('h2', {}, 'On your website'), h('p', { class: 'hint', style: 'margin:6px 0 12px' }, ev ? 'How the video box of "Image editing skills" will look to visitors.' : 'How the "Image composition skills" slider pictures will look to visitors.'), pvBody); };
+  const noPieces = !!(cmp || ev);
+  main.append(header(label, noPieces ? (cmp ? 'The Before and After slider for "' + label + '" on your website.' : 'The video for "' + label + '" on your website.') : 'Pieces shown under "' + label + '" in the Work section of your website. The top one shows first.', ...(noPieces ? [] : [h('button', { class: 'btn solid', type: 'button', onclick: () => workForm(null, touch) }, 'Add piece')])), ...(cmp ? [compareCard(), h('div', { style: 'height:18px' })] : []), ...(ev ? [videoCard(), h('div', { style: 'height:18px' })] : []), ...(noPieces ? [] : [h('h2', { class: 'sec' }, 'Pieces'), rows, h('div', { style: 'height:18px' }), h('div', { class: 'card' }, h('h2', {}, 'On your website'), h('p', { class: 'hint', style: 'margin:6px 0 12px' }, 'Every piece you add becomes one slide in "Work that earns attention", under the "' + label + '" filter, in this order. Image files only (PNG, JPG or WebP).'), slides)]), ...(noPieces ? [h('div', { style: 'height:18px' }), prevCard()] : []), bar.el);
   draw();
 }
 
@@ -561,9 +878,9 @@ async function viewGrievances(main) {
     tabs.replaceChildren(...['all', ...Object.keys(GRIEVANCE)].map(k => h('button', { class: 'tab' + (filter === k ? ' on' : ''), type: 'button', onclick: () => { filter = k; draw(); } },
       (k === 'all' ? 'All' : GRIEVANCE[k][0]) + ' (' + (k === 'all' ? draft.length : draft.filter(g => g.status === k).length) + ')')));
     const list = draft.filter(g => filter === 'all' || g.status === filter);
-    rows.replaceChildren(...(list.length ? list.map(card) : [h('div', { class: 'empty' }, draft.length ? 'Nothing with this status.' : 'No grievances logged. Add one when a client raises a complaint, then track it until it is resolved.')]));
+    rows.replaceChildren(...(list.length ? list.map(card) : [h('div', { class: 'empty' }, draft.length ? 'Nothing with this status.' : 'No grievances yet. When a client sends one from the Help button on your website, it shows up here.')]));
   };
-  main.append(header('Client Grievance', 'Complaints raised by clients. Log each one, set its priority and status, and note how you resolved it. Only you can see this.', h('button', { class: 'btn solid', type: 'button', onclick: () => grievanceForm(null, touch, draft) }, 'Add grievance')), tabs, rows, bar.el);
+  main.append(header('Client Grievance', 'Complaints sent by clients from the Help button on your website. Each one arrives here as Open. Set its priority and status and note how you resolved it. Only you can see this list.'), tabs, rows, bar.el);
   draw();
 }
 function grievanceForm(g, done, list) {
@@ -595,16 +912,25 @@ function ytId(u) {
   } catch { return ''; }
 }
 const THUMBS = true; /* show the real YouTube thumbnail; a play-button tile is the fallback */
+const imgSrc = u => u && (THUMBS || /^data:/.test(u)) ? u : ''; /* uploaded images show as thumbnails (the artifact preview can only show the ones it holds itself) */
 function thumb(url) {
   const id = ytId(url);
   const box = h('div', { class: 'tthumb' });
-  if (THUMBS && id) { const img = h('img', { src: 'https://i.ytimg.com/vi/' + id + '/mqdefault.jpg', alt: '', loading: 'lazy' }); img.addEventListener('error', () => img.remove()); box.append(img); }
+  if (THUMBS && id) {
+    /* try several YouTube thumbnail addresses in turn; if none loads, the play tile with the video ID stays */
+    const srcs = ['https://i.ytimg.com/vi/' + id + '/mqdefault.jpg', 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg', 'https://img.youtube.com/vi/' + id + '/0.jpg'];
+    let n = 0; const img = h('img', { alt: '', referrerpolicy: 'no-referrer', src: srcs[0] });
+    img.addEventListener('error', () => { n++; if (n < srcs.length) img.src = srcs[n]; else img.remove(); });
+    img.addEventListener('load', () => { if (img.naturalWidth && img.naturalWidth <= 120) { n++; if (n < srcs.length) img.src = srcs[n]; else img.remove(); } });
+    box.append(img);
+    box.append(h('span', { class: 'tid' }, 'YouTube · ' + id));
+  }
   box.append(h('i', { class: 'tplay', 'aria-hidden': 'true' }));
   return box;
 }
 async function viewMusic(main) {
   const data = await api('GET', '/music');
-  const draft = { enabled: data.enabled, tracks: data.tracks.map(t => ({ url: t.url, published: t.published })) };
+  const draft = { enabled: true, tracks: data.tracks.map(t => ({ url: t.url, published: t.published })) };
   const bar = savebar({ view: 'music', onSave: () => api('PUT', '/music', draft) });
   const rows = h('div', { class: 'list' });
   const touch = () => { bar.mark(); draw(); };
@@ -619,10 +945,9 @@ async function viewMusic(main) {
       h('button', { class: 'btn sm', type: 'button', onclick: () => trackForm(t, touch) }, 'Edit'),
       h('button', { class: 'btn sm danger', type: 'button', onclick: () => { draft.tracks.splice(i, 1); touch(); } }, 'Remove')));
   const draw = () => rows.replaceChildren(...(draft.tracks.length ? draft.tracks.map(row) : [h('div', { class: 'empty' }, 'No tracks yet. Paste a YouTube link to add your first one.')]));
-  const enabled = h('input', { type: 'checkbox', checked: draft.enabled, onchange: () => { draft.enabled = enabled.checked; bar.mark(); } });
   main.append(header('Music', 'Tracks in the player on your hero section. Each track is a YouTube link, and the top one plays first.',
       h('button', { class: 'btn solid', type: 'button', onclick: () => trackForm(null, touch, draft.tracks) }, 'Add track')),
-    h('div', { class: 'card setting' }, h('label', { class: 'check' }, enabled, 'Show the music player on the website')), rows, bar.el);
+    rows, bar.el);
   draw();
 }
 function trackForm(t, done, list) {
@@ -685,7 +1010,7 @@ async function viewResume(main) {
   const vis = h('input', { type: 'checkbox', checked: r.visible });
   const form = h('form', { class: 'card', onsubmit: e => e.preventDefault() },
     h('div', { class: 'filecard' }, h('div', { class: 'pdfbadge' }, 'PDF'), h('div', { class: 'fc-t' }, fname, fmeta), rm),
-    field('Upload or replace file', file, 'PDF up to 10 MB.'),
+    field('Upload or replace file', dropBox(file), 'PDF up to 10 MB.'),
     h('label', { class: 'check' }, vis, 'Show the resume button on the website'));
   form.addEventListener('change', e => { if (e.target !== file) bar.mark(); });
   main.append(header('Resume', 'The file visitors download from your hero section.'),
@@ -731,7 +1056,13 @@ let dock = null, dockFrame = null, dockBody = null, dockLogin = null, dockSt = {
 try { Object.assign(dockSt, JSON.parse(localStorage.getItem('sr-admin-dock') || '{}')); } catch {}
 if (!matchMedia('(min-width: 900px)').matches) dockSt.open = false;
 const saveDock = () => { try { localStorage.setItem('sr-admin-dock', JSON.stringify(dockSt)); } catch {} };
-function siteSrc() { return SITE_FRAME === 'live' ? '/?preview=1' : URL.createObjectURL(new Blob([window.__SITE_HTML__ || ''], { type: 'text/html' })); }
+function siteSrc() {
+  if (SITE_FRAME === 'live') return '/?preview=1';
+  /* artifact preview: the website copy gets the current sample content, so every save shows up like on the real server */
+  const c = window.__srPublicContent ? window.__srPublicContent() : null;
+  const inject = '<script>window.__SR_PREVIEW__=true;window.__SR_CONTENT__=' + JSON.stringify(c).replace(/</g, '\u003c') + ';</scr' + 'ipt>';
+  return URL.createObjectURL(new Blob([(window.__SITE_HTML__ || '').replace('<!--SR-CONTENT-->', inject)], { type: 'text/html' }));
+}
 function previewLook() {
   if (!dockFrame) return;
   try {
@@ -782,7 +1113,7 @@ function ensureDock() {
     dockBody, dockLogin, h('p', { class: 'pvhint' }, 'The real website. Click, scroll and try everything. It reloads after every save.'));
   const tab = h('button', { id: 'pvtab', type: 'button', title: 'Show the website preview', onclick: () => act('open') }, h('i', { 'aria-hidden': 'true' }), h('span', {}, 'Preview'));
   document.body.append(dock, tab);
-  dockFrame.addEventListener('load', () => { previewLook(); setTimeout(previewLook, 400); setTimeout(previewLook, 1500); });
+  dockFrame.addEventListener('load', () => { previewLook(); setTimeout(previewLook, 400); setTimeout(previewLook, 1500); if (pvPending) { const t = pvPending; setTimeout(() => pvScroll(t, false), 700); } });
   if (window.ResizeObserver) new ResizeObserver(fitDock).observe(dockBody);
   addEventListener('resize', layoutDock);
   layoutDock();
@@ -794,6 +1125,20 @@ function act(a) {
   saveDock(); layoutDock();
 }
 function removeDock() { if (dock) dock.remove(); const t = document.getElementById('pvtab'); if (t) t.remove(); dock = dockFrame = dockBody = null; document.documentElement.style.setProperty('--dock-w', '0px'); }
+/* The preview follows the menu: opening a page or a menu group scrolls the website to the part it edits. */
+const GROUP_TARGET = { 'Hero section': 'top', 'Appearance': 'top', 'Work': '#work', 'Client Feedback': '#feedback', 'Project Brief': '#hire' };
+const VIEW_TARGET = { style: 'top', theme: 'top', panels: 'top', 'work-branding': '#work > .brand-block', 'work-editing': '#photo', 'work-composition': '#composition', questions: '#faq' };
+let pvPending = null;
+const targetFor = name => VIEW_TARGET[name] || (VIEWS[name] && GROUP_TARGET[VIEWS[name][3]]) || null;
+function pvScroll(target, smooth = true) {
+  if (!target || !dockFrame) return;
+  try {
+    const w = dockFrame.contentWindow, d = w.document, el = target === 'top' ? null : d.querySelector(target);
+    if (d.readyState !== 'complete' || (target !== 'top' && !el)) { pvPending = target; return; }
+    w.scrollTo({ top: el ? Math.max(0, el.getBoundingClientRect().top + w.scrollY - 70) : 0, behavior: smooth ? 'smooth' : 'auto' });
+    pvPending = null;
+  } catch { pvPending = null; }
+}
 let rpTimer;
 function reloadPreview(now) {
   clearTimeout(rpTimer);
@@ -827,6 +1172,8 @@ async function viewLook(main, kind) {
 
 /* ---------- Appearance > Panels: which sections of the website are shown ---------- */
 const PANELS = [
+  ['hero', 'Hero intro', 'The first screen: heading, short intro, Resume and Fiverr buttons.'],
+  ['marquee', 'Services ticker', 'The scrolling line of services under the hero.'],
   ['music', 'Music player', 'The player under the header.'],
   ['work', 'Work gallery', 'The heading, filters and scrolling gallery of your work.'],
   ['brands', 'Brand identities', 'The brand identity case studies below the gallery.'],
@@ -847,14 +1194,37 @@ async function viewPanels(main) {
   const rows = PANELS.map(([id, name, sub]) => {
     const b = h('button', { class: 'sw', type: 'button', role: 'switch', 'aria-label': name + ' on the website', onclick: () => { if (hidden.has(id)) hidden.delete(id); else hidden.add(id); paint(); sync(); } }, h('i'));
     const pill = h('span', { class: 'pill' });
-    sw[id] = () => { const on = !hidden.has(id); b.setAttribute('aria-checked', String(on)); pill.textContent = on ? 'Shown' : 'Hidden'; pill.setAttribute('color', on ? 'mint' : 'sun'); pill.style.setProperty('--c', on ? '#12B886' : '#FFC700'); pill.style.setProperty('--t', on ? '#fff' : '#14102E'); };
+    sw[id] = () => { const on = !hidden.has(id); b.setAttribute('aria-checked', String(on)); pill.textContent = on ? 'Shown' : 'Hidden'; pill.setAttribute('color', on ? 'mint' : 'sun'); pill.style.setProperty('--c', on ? '#12B886' : '#FFC700'); pill.style.setProperty('--t', '#14102E'); };
     return h('div', { class: 'item trow panel-row' }, h('div', { class: 'trk' }, h('h3', {}, name), h('p', { class: 'meta' }, sub)), h('div', { class: 'acts' }, pill, b));
   });
   const paint = () => PANELS.forEach(([id]) => sw[id]());
   window.__srPanelsDraft = [...hidden]; if (!dockSt.open) { dockSt.open = true; saveDock(); layoutDock(); }
-  main.append(header('Panels', 'Choose which sections of your main website visitors can see. The preview on the right shows your choice before you save. The top part of the page (logo and hero) always stays.',
+  main.append(header('Panels', 'Choose which sections of your main website visitors can see. The preview on the right shows your choice before you save. The logo and menu bar at the very top always stay.',
     h('button', { class: 'btn', type: 'button', onclick: () => { hidden.clear(); paint(); sync(); } }, 'Show all')), h('div', { class: 'list' }, ...rows), bar.el);
   paint();
+}
+
+/* Account > Email alerts: client activity on the website comes to this mail */
+async function alertsCard() {
+  const a = await api('GET', '/alerts');
+  const to = h('input', { type: 'email', value: a.to, autocomplete: 'off', 'aria-label': 'Send alerts to' });
+  const inst = h('input', { type: 'checkbox' }), daily = h('input', { type: 'checkbox' }); inst.checked = a.instant; daily.checked = a.daily;
+  const st = h('p', { class: 'hint' });
+  const paint = x => {
+    st.className = 'hint ' + (!x.smtp || x.lastError ? 'badtxt' : x.lastOk ? 'good' : '');
+    st.textContent = !x.smtp ? 'The server has no mail account yet, so nothing can be sent. Set SMTP_HOST, SMTP_USER and SMTP_PASS on the server (see the README).'
+      : x.lastError ? 'Last mail problem: ' + x.lastError : x.lastOk ? 'Last mail sent ' + fmtDate(x.lastOk) + '.' : 'The mail account is set. Nothing sent yet.';
+  };
+  paint(a);
+  const reload = async () => { try { paint(await api('GET', '/alerts')); } catch {} };
+  const save = h('button', { class: 'btn solid', type: 'button', onclick: wrap(async () => { await api('PUT', '/alerts', { to: to.value, instant: inst.checked, daily: daily.checked }); toast('Email alerts saved'); await reload(); }) }, 'Save alerts');
+  const test = h('button', { class: 'btn', type: 'button', onclick: async () => { test.disabled = true; try { const r = await api('POST', '/alerts/test'); toast('Summary sent to ' + r.to); } catch (e) { toast(e.message, true); } test.disabled = false; await reload(); } }, 'Send the latest summary now');
+  return h('div', { class: 'card', style: 'margin-top:18px' }, h('h2', {}, 'Email alerts'),
+    h('p', { class: 'hint', style: 'margin:6px 0 14px' }, 'Everything clients do on your website comes to your mail, so you can answer them from your own mail or WhatsApp.'),
+    field('Send alerts to', to),
+    h('label', { class: 'check' }, inst, 'Right away when a client sends a project brief (Hire form) or a Help message'),
+    h('label', { class: 'check', style: 'margin-top:10px' }, daily, 'One daily summary of the website visits (visitors, devices, countries, where they came from, what they pressed). Sent after 9 AM for the day before, only on days when something happened.'),
+    st, h('div', { class: 'acts', style: 'margin-top:12px' }, save, test));
 }
 
 async function viewAccount(main) {
@@ -873,7 +1243,14 @@ async function viewAccount(main) {
     h('div', { class: 'field' }, h('label', {}, 'Verification for an email or password change'), h('p', { class: 'hint' }, 'Solve the captcha, press the button, then type the code that arrives in your mail.'), cap.el, ask),
     field('Code from your mail', code));
   form.addEventListener('input', () => bar.mark());
-  main.append(header('Account', 'Your admin sign-in details.'), form, bar.el);
+  main.append(header('Account', 'Your admin sign-in details and email alerts.'), form, await alertsCard(), bar.el);
 }
+
+/* no dragging of text, images or links inside the panel (dropping files on upload boxes still works) */
+document.addEventListener('dragstart', e => { if (!(e.target instanceof Element) || !e.target.closest('input, textarea')) e.preventDefault(); });
+/* keep the panel upright on phones and tablets: lock where the browser allows it, otherwise show a turn-back message */
+document.body.append(h('div', { class: 'rot-lock', role: 'alert' }, h('i', { class: 'rot-phone', 'aria-hidden': 'true' }), h('b', {}, 'Turn your phone upright'), h('small', {}, 'The admin panel works in portrait only.')));
+const lockUpright = () => { try { const o = screen.orientation; if (o && o.lock) o.lock('portrait').catch(() => {}); } catch {} };
+lockUpright(); document.addEventListener('pointerdown', lockUpright, { once: true });
 
 boot();
