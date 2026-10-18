@@ -11,12 +11,12 @@
 
 [[redirects]]
   from = "/api/*"
-  to = "https://YOUR-APP-NAME.onrender.com/api/:splat"
+  to = "https://portfolio-iham.onrender.com/api/:splat"
   status = 200
   force = true
 
 [[redirects]]
   from = "/uploads/*"
-  to = "https://YOUR-APP-NAME.onrender.com/uploads/:splat"
+  to = "https://portfolio-iham.onrender.com/uploads/:splat"
   status = 200
   force = true
